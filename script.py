@@ -16,7 +16,7 @@ load_dotenv()
 # Configuration Class #
 #######################
 class GameConfig:
-    MODEL_NAME = "gpt-4o-mini"
+    MODEL_NAME = "o1-mini"
     
     MIN_BASKETS = 3
     MAX_BASKETS = 7
@@ -43,18 +43,23 @@ class GameConfig:
 #######################################################
 # Helper: Generate prize values that sum to 30
 #######################################################
-def generate_prize_values(n: int) -> Dict[str, float]:
+def generate_prize_values(n: int) -> Dict[str, int]:
     """
-    Generate n random prize values that sum to 30.
+    Generate n random integer prize values that sum to 30.
     Returns a dictionary mapping prize labels (e.g., 'A', 'B', etc.) to their values.
     """
-    raw_values = [random.random() for _ in range(n)]
-    total_raw = sum(raw_values)
-    scaled_values = [30 * v / total_raw for v in raw_values]
-    # Round values to one decimal place.
-    scaled_values = [round(v, 1) for v in scaled_values]
+    # If there's only one prize type, its value is 30.
+    if n == 1:
+        return {string.ascii_uppercase[0]: 30}
+    
+    # Choose n-1 random cut points from the range 0 to 30 (inclusive)
+    cuts = sorted(random.sample(range(31), n - 1))
+    # Create n parts: first part is from 0 to first cut,
+    # each middle part is the difference between successive cuts,
+    # and the last part is 30 minus the last cut.
+    parts = [cuts[0]] + [cuts[i] - cuts[i - 1] for i in range(1, len(cuts))] + [30 - cuts[-1]]
     labels = list(string.ascii_uppercase[:n])
-    return dict(zip(labels, scaled_values))
+    return dict(zip(labels, parts))
 
 #######################################################
 # Command Extraction and Processing (with JSON format) #
@@ -167,7 +172,7 @@ def log_game_data_to_csv(game_data: dict) -> None:
 # Main Game Implementation with Nudging     #
 ##############################################
 class BasketGame:
-    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None):
+    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None, model_name="4o-mini"):
         """
         force_nudge: If set (True or False), the nudging status is fixed for this run.
         """
@@ -190,6 +195,8 @@ class BasketGame:
         
         self.dialog_history: List[Dict[str, str]] = []
         self.wrong_moves = 0
+
+        self.model_name = model_name
 
     def initialize_game(self) -> None:
         self.num_baskets = random.randint(GameConfig.MIN_BASKETS, GameConfig.MAX_BASKETS)
@@ -225,7 +232,19 @@ class BasketGame:
             "Your task is to decide on an action: you may choose to reveal some boxes (using the 'reveal' command) to gather more information about the hidden prizes, or you may choose a basket directly (using the 'choose' command), or you may 'accept' the recommended basket if you believe it to be optimal.\n"
             "Your responses must be in JSON format with the keys 'explanation', 'decision', and 'parameters'. Do not output any additional text outside the JSON object.\n"
         )
-        self.dialog_history = [{"role": "system", "content": system_instructions}]
+
+
+        if self.model_name == "o1-mini":
+            self.dialog_history = [{"role": "assistant", "content": 
+                                [{
+                                "type": "text",
+                                "text":system_instructions
+                                }]}]
+        else:
+            self.dialog_history = [{"role": "system", "content": system_instructions}]
+
+
+
         self.wrong_moves = 0
         
         self.game_data = {
@@ -243,7 +262,7 @@ class BasketGame:
             'final_choice': None,
             'total_reveal_cost': 0,
             'points_earned': None,
-            'model_used': GameConfig.MODEL_NAME,
+            'model_used': self.model_name,
             'wrong_moves': 0,
             'error': None
         }
@@ -272,7 +291,7 @@ class BasketGame:
         context_summary = self.get_context_summary()
         base_text = f"Current game state:\n{table}\nContext summary: {context_summary}\n"
         if self.nudge_present:
-            nudge_text = f"You have the option to choose the recommended basket: {self.default_option}" 
+            nudge_text = f"You have the option to choose the recommended basket: {self.default_option}\n" 
             
         else:
             nudge_text = ""
@@ -288,18 +307,18 @@ class BasketGame:
             "What is your action?"
         )
         full_prompt = base_text + nudge_text + instructions
-        self.dialog_history.append({"role": "user", "content": full_prompt})
+        self.dialog_history.append({"role": "user", "content": [{"type": "text","text":full_prompt}]})
         return full_prompt
 
     def ask_gpt(self) -> Optional[str]:
         try:
             response = self.client.chat.completions.create(
-                model=GameConfig.MODEL_NAME,
+                model=self.model_name,
                 messages=self.dialog_history,
-                temperature=0.2
+                temperature=0.2 if self.model_name != "o1-mini" else None
             )
             reply = response.choices[0].message.content.strip().lower()
-            self.dialog_history.append({"role": "assistant", "content": reply})
+            self.dialog_history.append({"role": "assistant", "content": [{"type": "text","text":reply}]})
             return reply
         except Exception as e:
             print(f"❌ Error in API call: {e}")
@@ -451,7 +470,7 @@ def run_experiment():
     
     for i, force_nudge in enumerate(total_rounds, 1):
         print(f"\n--- Round {i} ---")
-        game = BasketGame(practice=False, force_nudge=force_nudge)
+        game = BasketGame(practice=False, force_nudge=force_nudge, model_name=GameConfig.MODEL_NAME)
         game.play()
 
 if __name__ == "__main__":

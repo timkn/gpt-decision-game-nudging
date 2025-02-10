@@ -16,7 +16,7 @@ load_dotenv()
 # Configuration Class #
 #######################
 class GameConfig:
-    MODEL_NAME = "gpt-4o"
+    MODEL_NAME = "gpt-4o-mini"
     
     MIN_BASKETS = 3
     MAX_BASKETS = 7
@@ -26,6 +26,7 @@ class GameConfig:
 
     COST_PER_REVEAL = 2
 
+    # These are no longer used directly for prize values.
     MIN_PRIZE_VALUE = 10
     MAX_PRIZE_VALUE = 30
 
@@ -38,6 +39,22 @@ class GameConfig:
     NUM_TEST_ROUNDS = 30
 
     MAX_WRONG_MOVES = 3
+
+#######################################################
+# Helper: Generate prize values that sum to 30
+#######################################################
+def generate_prize_values(n: int) -> Dict[str, float]:
+    """
+    Generate n random prize values that sum to 30.
+    Returns a dictionary mapping prize labels (e.g., 'A', 'B', etc.) to their values.
+    """
+    raw_values = [random.random() for _ in range(n)]
+    total_raw = sum(raw_values)
+    scaled_values = [30 * v / total_raw for v in raw_values]
+    # Round values to one decimal place.
+    scaled_values = [round(v, 1) for v in scaled_values]
+    labels = list(string.ascii_uppercase[:n])
+    return dict(zip(labels, scaled_values))
 
 #######################################################
 # Command Extraction and Processing (with JSON format) #
@@ -179,8 +196,8 @@ class BasketGame:
         self.num_prize_types = random.randint(GameConfig.MIN_PRIZE_ROWS, GameConfig.MAX_PRIZE_ROWS)
         
         self.prize_labels = list(string.ascii_uppercase[:self.num_prize_types])
-        self.prize_values = {prize: random.randint(GameConfig.MIN_PRIZE_VALUE, GameConfig.MAX_PRIZE_VALUE)
-                             for prize in self.prize_labels}
+        # Use our helper to generate prize values that sum to 30.
+        self.prize_values = generate_prize_values(self.num_prize_types)
         self.basket_counts = {
             basket: {prize: random.randint(GameConfig.MIN_PRIZE_COUNT, GameConfig.MAX_PRIZE_COUNT)
                      for prize in self.prize_labels}
@@ -190,7 +207,6 @@ class BasketGame:
             basket: {prize: '-' for prize in self.prize_labels}
             for basket in range(1, self.num_baskets + 1)
         }
-        # Compute the recommended basket using a simple count heuristic.
         def count_sum(b):
             return sum(self.basket_counts[b][prize] for prize in self.prize_labels)
         self.default_option = max(range(1, self.num_baskets + 1), key=count_sum)
@@ -199,7 +215,6 @@ class BasketGame:
         else:
             self.nudge_present = random.choice([True, False]) if GameConfig.NUDGE_ENABLED else False
         
-        # Set up the initial system message with detailed game instructions.
         system_instructions = (
             "You are an AI playing a sequential decision-making game.\n"
             "In this game, there are several baskets. Each basket contains a hidden number of prizes for each of several prize types (e.g., A, B, C, etc.).\n"

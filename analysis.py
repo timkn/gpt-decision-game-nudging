@@ -351,6 +351,7 @@ def plot_model_comparison(df: pd.DataFrame) -> plt.Figure:
     ax.set_ylabel("Points Earned")
     plt.tight_layout()
     return fig
+
 def plot_decision_by_model_and_nudge(df: pd.DataFrame) -> plt.Figure:
     """
     Create a faceted plot that shows the distribution of final decision types 
@@ -407,6 +408,108 @@ def generate_error_statistics(df: pd.DataFrame) -> None:
     else:
         print("No error games recorded.")
 
+def plot_model_points_comparison(df: pd.DataFrame) -> plt.Figure:
+    """Plot comparison of points earned between different models."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Box plot
+    sns.boxplot(
+        data=df,
+        x='model_used',
+        y='points_earned',
+        hue='nudge_present',
+        ax=ax1
+    )
+    ax1.set_title('Points Distribution by Model and Nudge Condition')
+    ax1.set_xlabel('Model')
+    ax1.set_ylabel('Points Earned')
+    
+    # Add mean points as text
+    for i, model in enumerate(df['model_used'].unique()):
+        for j, nudge in enumerate([False, True]):
+            mean_points = df[(df['model_used'] == model) & (df['nudge_present'] == nudge)]['points_earned'].mean()
+            ax1.text(i + (j-0.5)*0.3, ax1.get_ylim()[1], f'{mean_points:.1f}', 
+                    ha='center', va='bottom')
+    
+    # Violin plot for density visualization
+    sns.violinplot(
+        data=df,
+        x='model_used',
+        y='points_earned',
+        ax=ax2
+    )
+    ax2.set_title('Points Distribution Density by Model')
+    ax2.set_xlabel('Model')
+    ax2.set_ylabel('Points Earned')
+    
+    plt.tight_layout()
+    return fig
+
+def generate_model_performance_stats(df: pd.DataFrame) -> None:
+    """Generate detailed statistics about model performance."""
+    print("\n=== Model Performance Statistics ===")
+    
+    # Overall performance
+    print("\nMean Points by Model:")
+    print(df.groupby('model_used')['points_earned'].agg(['mean', 'std', 'count']).round(2))
+    
+    # Performance with and without nudge
+    print("\nMean Points by Model and Nudge Condition:")
+    print(df.groupby(['model_used', 'nudge_present'])['points_earned'].mean().round(2))
+    
+    # Statistical tests
+    from scipy import stats
+    print("\nStatistical Tests between Models:")
+    models = df['model_used'].unique()
+    for i in range(len(models)):
+        for j in range(i+1, len(models)):
+            model1, model2 = models[i], models[j]
+            t_stat, p_val = stats.ttest_ind(
+                df[df['model_used'] == model1]['points_earned'],
+                df[df['model_used'] == model2]['points_earned']
+            )
+            print(f"\n{model1} vs {model2}:")
+            print(f"t-statistic: {t_stat:.3f}")
+            print(f"p-value: {p_val:.3f}")
+
+def plot_single_model_points(df: pd.DataFrame, model_name: str) -> plt.Figure:
+    """Plot points distribution for a single model."""
+    # Filter for the specified model
+    model_df = df[df['model_used'] == model_name]
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Create violin plot with individual points
+    sns.violinplot(
+        data=model_df,
+        y='points_earned',
+        ax=ax,
+        inner='box'  # Shows quartile boxes inside violin
+    )
+    
+    # Add individual points
+    sns.stripplot(
+        data=model_df,
+        y='points_earned',
+        color='red',
+        alpha=0.3,
+        size=4,
+        ax=ax
+    )
+    
+    # Add mean line and value
+    mean_points = model_df['points_earned'].mean()
+    ax.axhline(y=mean_points, color='red', linestyle='--', alpha=0.5)
+    ax.text(0.95, mean_points, f'Mean: {mean_points:.1f}', 
+            ha='right', va='bottom')
+    
+    ax.set_title(f'Points Distribution for {model_name}')
+    ax.set_ylabel('Points Earned')
+    ax.set_xticks([])  # Remove x-axis ticks since we only have one model
+    
+    plt.tight_layout()
+    return fig
+
 def generate_analysis_report():
     """Generate complete analysis report with plots and statistics."""
     df = load_and_prepare_data()
@@ -431,7 +534,8 @@ def generate_analysis_report():
     'basket_values_debug': plot_basket_values_debug,
     'model_comparison': plot_model_comparison,
     'decision_by_model_nudge': plot_decision_by_model_and_nudge,
-    'nudge_behavior': plot_nudge_behavior
+    'nudge_behavior': plot_nudge_behavior,
+    'model_points_comparison': plot_model_points_comparison
     }
     
     # Generate plots only for valid games.
@@ -465,8 +569,17 @@ def generate_analysis_report():
     plt.savefig('plots/nudge_behavior.png', dpi=300, bbox_inches='tight')
     plt.close()
     
+    print("\n===== Model Performance Statistics (Valid Games) =====")
+    generate_model_performance_stats(valid_df)
+    
     print("\n===== Error Games Statistics =====")
     generate_error_statistics(error_df)
+
+    # Add single model plot for each model
+    for model in df['model_used'].unique():
+        fig = plot_single_model_points(valid_df, model)
+        plt.savefig(f'plots/points_{model}.png', dpi=300, bbox_inches='tight')
+        plt.close()
 
 if __name__ == "__main__":
     generate_analysis_report()

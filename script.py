@@ -16,28 +16,21 @@ load_dotenv()
 # Configuration Class #
 #######################
 class GameConfig:
-    MODEL_NAME = "o1-mini"
-    
+    MODEL_NAME = "gpt-4o-mini"  # default; will be overridden by experiment
     MIN_BASKETS = 3
     MAX_BASKETS = 7
-
     MIN_PRIZE_ROWS = 3
     MAX_PRIZE_ROWS = 6
-
     COST_PER_REVEAL = 2
-
     # These are no longer used directly for prize values.
     MIN_PRIZE_VALUE = 10
     MAX_PRIZE_VALUE = 30
-
     MIN_PRIZE_COUNT = 1
     MAX_PRIZE_COUNT = 5
-
     CSV_FILENAME = "game_results.csv"
     NUDGE_ENABLED = True
     NUM_PRACTICE_ROUNDS = 2
-    NUM_TEST_ROUNDS = 30
-
+    NUM_TEST_ROUNDS = 30  # default total rounds; not used in our new experiment loop
     MAX_WRONG_MOVES = 3
 
 #######################################################
@@ -48,15 +41,9 @@ def generate_prize_values(n: int) -> Dict[str, int]:
     Generate n random integer prize values that sum to 30.
     Returns a dictionary mapping prize labels (e.g., 'A', 'B', etc.) to their values.
     """
-    # If there's only one prize type, its value is 30.
     if n == 1:
         return {string.ascii_uppercase[0]: 30}
-    
-    # Choose n-1 random cut points from the range 0 to 30 (inclusive)
     cuts = sorted(random.sample(range(31), n - 1))
-    # Create n parts: first part is from 0 to first cut,
-    # each middle part is the difference between successive cuts,
-    # and the last part is 30 minus the last cut.
     parts = [cuts[0]] + [cuts[i] - cuts[i - 1] for i in range(1, len(cuts))] + [30 - cuts[-1]]
     labels = list(string.ascii_uppercase[:n])
     return dict(zip(labels, parts))
@@ -68,25 +55,20 @@ def extract_command(ai_response: str) -> str:
     backtick_matches = re.findall(r'`([^`]*)`', ai_response)
     if backtick_matches:
         return backtick_matches[0].strip()
-    
     reveal_match = re.search(r'(reveal\s*\[[^\]]+\])', ai_response, flags=re.IGNORECASE)
     if reveal_match:
         return reveal_match.group(1).strip()
-    
     choose_match = re.search(r'(choose\s+\d+)', ai_response, flags=re.IGNORECASE)
     if choose_match:
         return choose_match.group(1).strip()
-    
     accept_match = re.search(r'\b(accept)\b', ai_response, flags=re.IGNORECASE)
     if accept_match:
         return accept_match.group(1).strip()
-    
     return ai_response.strip()
 
 def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any]:
     cleaned_response = re.sub(r'^```(?:json)?\s*', '', ai_response, flags=re.IGNORECASE)
     cleaned_response = re.sub(r'\s*```$', '', cleaned_response)
-    
     try:
         parsed = json.loads(cleaned_response)
         if isinstance(parsed, dict) and "decision" in parsed:
@@ -111,21 +93,17 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
             return ("unknown", ai_response)
     except Exception:
         pass
-    
     command_text = extract_command(ai_response)
     print(f"[Fallback] Extracted command: {command_text}")
-    
     if re.search(r'\baccept\b', command_text, flags=re.IGNORECASE):
         if nudge_present:
             return ('accept', None)
         else:
             return ('unknown', command_text)
-    
     choose_match = re.search(r'choose\s+(\d+)', command_text, flags=re.IGNORECASE)
     if choose_match:
         basket_num = int(choose_match.group(1))
         return ('choose', basket_num)
-    
     if re.search(r'\breveal\b', command_text, flags=re.IGNORECASE):
         reveal_content_match = re.search(r'reveal\s*\[([^\]]+)\]', command_text, flags=re.IGNORECASE)
         if reveal_content_match:
@@ -134,7 +112,6 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
             reveal_instructions = command_text.replace("reveal", "").strip()
         reveal_choices = [choice.strip() for choice in reveal_instructions.split(",") if choice.strip()]
         return ('reveal', reveal_choices)
-    
     return ('unknown', command_text)
 
 #####################################################
@@ -148,14 +125,12 @@ def log_game_data_to_csv(game_data: dict) -> None:
         'total_reveal_cost', 'points_earned', 'wrong_moves', 'model_used', 'error'
     ]
     file_exists = os.path.exists(GameConfig.CSV_FILENAME)
-    
     if 'revealed_cells' in game_data:
         revealed_cells_converted = {
             f"{basket},{prize}": value 
             for (basket, prize), value in game_data['revealed_cells'].items()
         }
         game_data = {**game_data, 'revealed_cells': revealed_cells_converted}
-    
     with open(GameConfig.CSV_FILENAME, 'a', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=columns)
         if not file_exists:
@@ -172,38 +147,37 @@ def log_game_data_to_csv(game_data: dict) -> None:
 # Main Game Implementation with Nudging     #
 ##############################################
 class BasketGame:
-    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None, model_name="4o-mini"):
+    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None, seed: Optional[int] = None, model_name: Optional[str] = None):
         """
         force_nudge: If set (True or False), the nudging status is fixed for this run.
+        seed: If provided, set the random seed for reproducible game conditions.
+        model_name: The model name to use for API calls. This overrides the default in GameConfig.
         """
+        if seed is not None:
+            random.seed(seed)
         self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        
         self.baskets: Dict[int, Dict[str, Optional[int]]] = {}
         self.basket_counts: Dict[int, Dict[str, int]] = {}
         self.prize_values: Dict[str, int] = {}
-        
-        self.default_option: Optional[int] = None  # Recommended basket (by count heuristic)
-        self.nudge_present: Optional[bool] = None    # Indicates if nudging is active
-        
+        self.default_option: Optional[int] = None
+        self.nudge_present: Optional[bool] = None
         self.game_data: Dict = {}
         self.practice = practice
         self.force_nudge = force_nudge
-        
         self.num_baskets: int = 0
         self.num_prize_types: int = 0
         self.prize_labels: List[str] = []
-        
         self.dialog_history: List[Dict[str, str]] = []
         self.wrong_moves = 0
-
-        self.model_name = model_name
+        if model_name is not None:
+            self.model_name = model_name
+        else:
+            self.model_name = GameConfig.MODEL_NAME
 
     def initialize_game(self) -> None:
         self.num_baskets = random.randint(GameConfig.MIN_BASKETS, GameConfig.MAX_BASKETS)
         self.num_prize_types = random.randint(GameConfig.MIN_PRIZE_ROWS, GameConfig.MAX_PRIZE_ROWS)
-        
         self.prize_labels = list(string.ascii_uppercase[:self.num_prize_types])
-        # Use our helper to generate prize values that sum to 30.
         self.prize_values = generate_prize_values(self.num_prize_types)
         self.basket_counts = {
             basket: {prize: random.randint(GameConfig.MIN_PRIZE_COUNT, GameConfig.MAX_PRIZE_COUNT)
@@ -232,8 +206,7 @@ class BasketGame:
             "Your task is to decide on an action: you may choose to reveal some boxes (using the 'reveal' command) to gather more information about the hidden prizes, or you may choose a basket directly (using the 'choose' command), or you may 'accept' the recommended basket if you believe it to be optimal.\n"
             "Your responses must be in JSON format with the keys 'explanation', 'decision', and 'parameters'. Do not output any additional text outside the JSON object.\n"
         )
-
-
+        # For o1-mini, we may need a different initial message format (as an example).
         if self.model_name == "o1-mini":
             self.dialog_history = [{"role": "assistant", "content": 
                                 [{
@@ -242,11 +215,7 @@ class BasketGame:
                                 }]}]
         else:
             self.dialog_history = [{"role": "system", "content": system_instructions}]
-
-
-
         self.wrong_moves = 0
-        
         self.game_data = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'round_type': 'practice' if self.practice else 'test',
@@ -292,7 +261,6 @@ class BasketGame:
         base_text = f"Current game state:\n{table}\nContext summary: {context_summary}\n"
         if self.nudge_present:
             nudge_text = f"You have the option to choose the recommended basket: {self.default_option}\n" 
-            
         else:
             nudge_text = ""
         instructions = (
@@ -315,7 +283,7 @@ class BasketGame:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=self.dialog_history,
-                temperature=0.2 if self.model_name != "o1-mini" else None
+                temperature=0.2 if self.model_name != "o1-mini" else 1
             )
             reply = response.choices[0].message.content.strip().lower()
             self.dialog_history.append({"role": "assistant", "content": [{"type": "text","text":reply}]})
@@ -418,7 +386,7 @@ class BasketGame:
 
         if error_occurred:
             self.game_data['error'] = error_message
-            print(f"Game ended with error: {error_message}. Skipping game.")
+            print(f"Game ended with error: {error_occurred} - {error_message}. Skipping game.")
             log_game_data_to_csv(self.game_data)
             return
 
@@ -460,18 +428,32 @@ class BasketGame:
 # Experiment Entry Point  #
 ###########################
 def run_experiment():
-    print("=== Running Game Simulation ===")
-    num_rounds = GameConfig.NUM_TEST_ROUNDS
-    rounds_with_nudge = num_rounds // 2
-    rounds_without_nudge = num_rounds - rounds_with_nudge
+    """
+    Run a set of rounds for three different models:
+      - "gpt-4o-mini"
+      - "gpt-4o"
+      - "o1-mini"
+    Each model will play 30 rounds (total 90 rounds), and for each model,
+    half the rounds will have nudging present and half not.
+    The same list of seeds and nudge conditions is used for each model for reproducibility.
+    """
+    model_names = ["gpt-4o-mini", "gpt-4o", "o1-mini"]
+    num_rounds_per_model = 30
+
+    # Generate a fixed list of seeds (one per round) for reproducibility.
+    seeds = [random.randint(0, 10**6) for _ in range(num_rounds_per_model)]
     
-    total_rounds = [True] * rounds_with_nudge + [False] * rounds_without_nudge
-    random.shuffle(total_rounds)
+    # Create a list of force_nudge booleans: half True, half False.
+    force_nudges = [True] * (num_rounds_per_model // 2) + [False] * (num_rounds_per_model - num_rounds_per_model // 2)
+    random.shuffle(force_nudges)
     
-    for i, force_nudge in enumerate(total_rounds, 1):
-        print(f"\n--- Round {i} ---")
-        game = BasketGame(practice=False, force_nudge=force_nudge, model_name=GameConfig.MODEL_NAME)
-        game.play()
+    for model in model_names:
+        print(f"\n=== Running Game Simulation for model: {model} ===")
+        for i, (seed, force_nudge) in enumerate(zip(seeds, force_nudges), start=1):
+            print(f"\n--- Model {model}, Round {i} (Seed: {seed}, Nudge: {force_nudge}) ---")
+            game = BasketGame(practice=False, force_nudge=force_nudge, seed=seed, model_name=model)
+            game.play()
 
 if __name__ == "__main__":
     run_experiment()
+

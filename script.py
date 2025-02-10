@@ -155,7 +155,7 @@ def log_game_data_to_csv(game_data: dict) -> None:
     ]
     file_exists = os.path.exists(GameConfig.CSV_FILENAME)
     
-    # Convert revealed_cells dictionary to use string keys instead of tuples
+    # Convert revealed_cells dictionary to use string keys instead of tuples.
     if 'revealed_cells' in game_data:
         revealed_cells_converted = {
             f"{basket},{prize}": value 
@@ -201,7 +201,7 @@ class BasketGame:
         self.num_prize_types: int = 0
         self.prize_labels: List[str] = []
 
-        # Conversation history (full context for the game).
+        # We now use a summary context instead of the full dialogue.
         self.dialog_history: List[Dict[str, str]] = []
         # Counter for wrong moves.
         self.wrong_moves = 0
@@ -225,14 +225,14 @@ class BasketGame:
             basket: {prize: '-' for prize in self.prize_labels}
             for basket in range(1, self.num_baskets + 1)
         }
-        # Determine the default basket (recommended) as the one with the highest weighted sum.
+        # Determine the default (recommended) basket as the one with the highest weighted sum.
         def weighted_sum(b):
             return sum(self.basket_counts[b][prize] * self.prize_values[prize] for prize in self.prize_labels)
         self.default_option = max(range(1, self.num_baskets + 1), key=weighted_sum)
         # The default nudge is available on certain problems.
         self.nudge_present = random.choice([True, False]) if GameConfig.NUDGE_ENABLED else False
 
-        # Reset conversation history and wrong moves.
+        # Reset summary context and wrong moves.
         self.dialog_history = [
             {"role": "system", "content": "You are an AI playing a sequential decision-making game."}
         ]
@@ -257,6 +257,19 @@ class BasketGame:
             'wrong_moves': 0,
         }
 
+    def get_context_summary(self) -> str:
+        """
+        Build a concise summary of the game context.
+        This includes a brief action log, the wrong-move count, and the recommended basket if available.
+        """
+        summary = ""
+        if self.game_data.get('action_log'):
+            summary += "Action log: " + ", ".join(self.game_data['action_log']) + ". "
+        summary += f"Wrong moves: {self.wrong_moves}. "
+        if self.nudge_present:
+            summary += f"Recommended basket: Basket {self.default_option}. "
+        return summary
+
     def build_table(self) -> str:
         """Construct the current game table (in markdown) from visible cells."""
         header = " | ".join(f"Basket {i}" for i in range(1, self.num_baskets + 1))
@@ -270,55 +283,55 @@ class BasketGame:
 
     def get_action_prompt(self) -> str:
         """
-        Generate the prompt that includes the full game context (history), the current table,
+        Generate the prompt that includes a concise context summary, the current table,
         and clear instructions for the AI.
         
         IMPORTANT:
-          - You must choose between revealing cells or selecting a basket.
-          - If you choose to reveal cells, list the cells in the format 'basket prize' (for example: '1 a', '2 b').
-          - If you decide to choose a basket, respond with the basket number.
-          - Alternatively, if you want to accept the recommended basket, respond with 'accept'.
-          - Note: The recommended basket is always the best basket (i.e. the highest-paying basket if prizes were equal).
+          - You must choose either to reveal cells or select a basket.
+          - If revealing, list cells in the format "basket prize" (e.g., "1 a", "2 b").
+          - If choosing a basket, supply the basket number.
+          - Alternatively, you can 'accept' the recommended basket.
+          - The recommended basket is always the best basket (i.e., the highest-paying basket if prizes were equal).
         
         Respond in JSON format with the following keys:
           - explanation: a free-form text explanation of your reasoning.
           - decision: one of 'accept', 'choose', or 'reveal'.
-          - parameters: an array of parameters. For 'choose', include the basket number as the first element; for 'reveal', include the list of cell choices (e.g., "1 a", "2 b", etc.).
-          
+          - parameters: an array of parameters. For 'choose', include the basket number as the first element;
+                        for 'reveal', include the list of cell choices (e.g., "1 a", "2 b", etc.).
+        
         For example:
           {"explanation": "I want to reveal cells to gather more information.", "decision": "reveal", "parameters": ["1 a", "1 b", "1 c", "1 d", "1 e"]}
-          
+        
         What is your action?
         """
         table = self.build_table()
+        context_summary = self.get_context_summary()
         base_text = (
-            f"You are playing a decision-making game with {self.num_baskets} baskets and {len(self.prize_labels)} prize types.\n"
-            f"Each basket contains a hidden count for each prize type. Revealing a cell costs {GameConfig.COST_PER_REVEAL} points per reveal.\n"
-            "The reward is calculated as:\n"
-            "    reward = (for each prize row: [basket count] × [prize's point value]) summed over all rows, minus (total reveal cost).\n"
-            "The prize values are shown in the row headers (e.g., 'A: 23 points' means prize A is worth 23 points).\n"
-            f"Here is the current table of baskets and prizes:\n{table}\n"
+            f"Current game state:\n{table}\n"
+            f"Context summary: {context_summary}\n"
         )
         if self.nudge_present:
-            nudge_text = f"You have the option to choose the recommended basket (default nudge). The recommended basket is Basket {self.default_option}, which is always the best basket (i.e. the highest-paying basket if prizes were equal).\n"
+            nudge_text = f"You have the option to choose the recommended basket (default nudge). The recommended basket is Basket {self.default_option}, which is always the best basket (i.e., the highest-paying basket if prizes were equal).\n"
         else:
             nudge_text = ""
         instructions = (
             "Respond in JSON format with the following keys:\n"
             "  - explanation: a free-form text explanation of your reasoning.\n"
             "  - decision: one of 'accept', 'choose', or 'reveal'.\n"
-            "  - parameters: an array of parameters. For 'choose', include the basket number as the first element; for 'reveal', include the list of cell choices (e.g., \"1 a\", \"2 b\", etc.).\n"
+            "  - parameters: an array of parameters. For 'choose', include the basket number as the first element; "
+            "for 'reveal', include the list of cell choices (e.g., \"1 a\", \"2 b\", etc.).\n"
             "For example:\n"
             "  {\"explanation\": \"I want to reveal cells to gather more information.\", \"decision\": \"reveal\", \"parameters\": [\"1 a\", \"1 b\", \"1 c\", \"1 d\", \"1 e\"]}\n"
             "What is your action?"
         )
         full_prompt = base_text + nudge_text + instructions
-        self.dialog_history.append({"role": "user", "content": full_prompt})
-        return "\n".join(f"{m['role']}: {m['content']}" for m in self.dialog_history)
+        # Instead of accumulating the entire conversation, we send only the summary.
+        self.dialog_history = [{"role": "user", "content": full_prompt}]
+        return full_prompt
 
     def ask_gpt(self) -> Optional[str]:
         """
-        Sends the full conversation history to the AI and returns its response.
+        Sends the current prompt (with summary context) to the AI and returns its response.
         """
         try:
             response = self.client.chat.completions.create(
@@ -327,6 +340,7 @@ class BasketGame:
                 temperature=0.2
             )
             reply = response.choices[0].message.content.strip().lower()
+            # Replace the conversation history with the latest exchange (if needed).
             self.dialog_history.append({"role": "assistant", "content": reply})
             return reply
         except Exception as e:
@@ -369,7 +383,7 @@ class BasketGame:
                 self.wrong_moves += 1
 
     def play(self) -> None:
-        """Main game loop. The full context is sent on every turn, and wrong moves are tracked."""
+        """Main game loop. The hybrid context summary is sent on every turn, and wrong moves are tracked."""
         self.initialize_game()
         final_choice = None
         max_iterations = 10
@@ -433,7 +447,7 @@ class BasketGame:
         print(f"Revealed cells: {self.game_data['revealed_cells']}")
         print(f"Wrong moves: {self.wrong_moves}")
         print(f"Points earned: {points_earned}")
-        print(f"Default (recommended) basket: Basket {self.default_option}")
+        print(f"Recommended basket: Basket {self.default_option}")
 
         # Log game data to CSV.
         log_game_data_to_csv(self.game_data)

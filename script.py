@@ -150,7 +150,7 @@ def log_game_data_to_csv(game_data: dict) -> None:
     columns = [
         'timestamp', 'round_type', 'num_baskets', 'num_prize_types',
         'prize_labels', 'prize_values', 'basket_counts', 'nudge_present',
-        'default_basket', 'action_log', 'revealed_cells', 'final_choice',
+        'default_basket', 'best_basket', 'action_log', 'revealed_cells', 'final_choice',
         'total_reveal_cost', 'points_earned', 'wrong_moves', 'model_used'
     ]
     file_exists = os.path.exists(GameConfig.CSV_FILENAME)
@@ -201,7 +201,7 @@ class BasketGame:
         self.num_prize_types: int = 0
         self.prize_labels: List[str] = []
 
-        # We now use a summary context instead of the full dialogue.
+        # We use a summary context instead of the full conversation.
         self.dialog_history: List[Dict[str, str]] = []
         # Counter for wrong moves.
         self.wrong_moves = 0
@@ -225,10 +225,11 @@ class BasketGame:
             basket: {prize: '-' for prize in self.prize_labels}
             for basket in range(1, self.num_baskets + 1)
         }
-        # Determine the default (recommended) basket as the one with the highest weighted sum.
-        def weighted_sum(b):
-            return sum(self.basket_counts[b][prize] * self.prize_values[prize] for prize in self.prize_labels)
-        self.default_option = max(range(1, self.num_baskets + 1), key=weighted_sum)
+        # Determine the default (recommended) basket using a simple count heuristic
+        # (i.e., assuming every prize is equal). This is the basket with the most prizes.
+        def count_sum(b):
+            return sum(self.basket_counts[b][prize] for prize in self.prize_labels)
+        self.default_option = max(range(1, self.num_baskets + 1), key=count_sum)
         # The default nudge is available on certain problems.
         self.nudge_present = random.choice([True, False]) if GameConfig.NUDGE_ENABLED else False
 
@@ -291,7 +292,9 @@ class BasketGame:
           - If revealing, list cells in the format "basket prize" (e.g., "1 a", "2 b").
           - If choosing a basket, supply the basket number.
           - Alternatively, you can 'accept' the recommended basket.
-          - The recommended basket is always the best basket (i.e., the highest-paying basket if prizes were equal).
+          - Note: The recommended basket is computed by assuming all prizes are equal (i.e., by total count)
+                  and represents a good default. However, the actual best basket (which maximizes payout)
+                  may be different.
         
         Respond in JSON format with the following keys:
           - explanation: a free-form text explanation of your reasoning.
@@ -311,7 +314,11 @@ class BasketGame:
             f"Context summary: {context_summary}\n"
         )
         if self.nudge_present:
-            nudge_text = f"You have the option to choose the recommended basket (default nudge). The recommended basket is Basket {self.default_option}, which is always the best basket (i.e., the highest-paying basket if prizes were equal).\n"
+            nudge_text = (
+                f"You have the option to choose the recommended basket (default nudge). "
+                f"The recommended basket is Basket {self.default_option}, which is computed by assuming all prizes are equal (i.e., by total count) and represents a good default option. "
+                f"However, note that the actual best basket (the one that would pay the highest based on prize values) might be different.\n"
+            )
         else:
             nudge_text = ""
         instructions = (
@@ -325,7 +332,7 @@ class BasketGame:
             "What is your action?"
         )
         full_prompt = base_text + nudge_text + instructions
-        # Instead of accumulating the entire conversation, we send only the summary.
+        # We send only the summary and current table (not the full previous conversation) to keep the prompt concise.
         self.dialog_history = [{"role": "user", "content": full_prompt}]
         return full_prompt
 
@@ -340,7 +347,6 @@ class BasketGame:
                 temperature=0.2
             )
             reply = response.choices[0].message.content.strip().lower()
-            # Replace the conversation history with the latest exchange (if needed).
             self.dialog_history.append({"role": "assistant", "content": reply})
             return reply
         except Exception as e:
@@ -436,10 +442,17 @@ class BasketGame:
                            for prize in self.prize_labels)
         points_earned = basket_total - total_reveal_cost
 
+        # Compute the best basket (the one that would pay the highest using actual prize values).
+        best_basket = max(
+            range(1, self.num_baskets + 1),
+            key=lambda b: sum(self.basket_counts[b][prize] * self.prize_values[prize] for prize in self.prize_labels)
+        )
+
         self.game_data.update({
             'final_choice': final_choice,
             'total_reveal_cost': total_reveal_cost,
-            'points_earned': points_earned
+            'points_earned': points_earned,
+            'best_basket': best_basket
         })
 
         print("\nFinal Game Outcome:")
@@ -447,7 +460,8 @@ class BasketGame:
         print(f"Revealed cells: {self.game_data['revealed_cells']}")
         print(f"Wrong moves: {self.wrong_moves}")
         print(f"Points earned: {points_earned}")
-        print(f"Recommended basket: Basket {self.default_option}")
+        print(f"Recommended basket (default nudge): Basket {self.default_option}")
+        print(f"Best basket (actual optimum): Basket {best_basket}")
 
         # Log game data to CSV.
         log_game_data_to_csv(self.game_data)

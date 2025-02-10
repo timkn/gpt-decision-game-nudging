@@ -3,7 +3,7 @@ import csv
 from datetime import datetime
 import os
 from dotenv import load_dotenv
-from typing import Dict, Optional, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 import random
 import string
 import re
@@ -42,7 +42,7 @@ class GameConfig:
     NUM_PRACTICE_ROUNDS = 2
     NUM_TEST_ROUNDS = 30
 
-    # Maximum wrong moves allowed before forcing an exit.
+    # Maximum wrong moves allowed before forcing an error.
     MAX_WRONG_MOVES = 3
 
 #######################################################
@@ -58,22 +58,22 @@ def extract_command(ai_response: str) -> str:
     backtick_matches = re.findall(r'`([^`]*)`', ai_response)
     if backtick_matches:
         return backtick_matches[0].strip()
-
-    # 2. If no backticks, search for a 'reveal' command pattern.
+    
+    # 2. Search for a 'reveal' command pattern.
     reveal_match = re.search(r'(reveal\s*\[[^\]]+\])', ai_response, flags=re.IGNORECASE)
     if reveal_match:
         return reveal_match.group(1).strip()
-
-    # 3. Look for a 'choose' command pattern (e.g., "choose 3").
+    
+    # 3. Look for a 'choose' command pattern.
     choose_match = re.search(r'(choose\s+\d+)', ai_response, flags=re.IGNORECASE)
     if choose_match:
         return choose_match.group(1).strip()
-
+    
     # 4. Look for an 'accept' command.
     accept_match = re.search(r'\b(accept)\b', ai_response, flags=re.IGNORECASE)
     if accept_match:
         return accept_match.group(1).strip()
-
+    
     # 5. Fallback: return the full response.
     return ai_response.strip()
 
@@ -82,13 +82,10 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
     Process the raw AI response and return a tuple (command_type, command_value)
     where command_type is one of 'accept', 'choose', 'reveal', or 'unknown'.
     command_value holds additional parsed information (e.g., basket number or reveal choices).
-
-    This function first attempts to parse the response as JSON (after cleaning markdown code fences).
-    If that fails, it falls back to regular-expression extraction.
     """
     cleaned_response = re.sub(r'^```(?:json)?\s*', '', ai_response, flags=re.IGNORECASE)
     cleaned_response = re.sub(r'\s*```$', '', cleaned_response)
-
+    
     try:
         parsed = json.loads(cleaned_response)
         if isinstance(parsed, dict) and "decision" in parsed:
@@ -113,21 +110,21 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
             return ("unknown", ai_response)
     except Exception:
         pass
-
+    
     command_text = extract_command(ai_response)
     print(f"[Fallback] Extracted command: {command_text}")
-
+    
     if re.search(r'\baccept\b', command_text, flags=re.IGNORECASE):
         if nudge_present:
             return ('accept', None)
         else:
             return ('unknown', command_text)
-
+    
     choose_match = re.search(r'choose\s+(\d+)', command_text, flags=re.IGNORECASE)
     if choose_match:
         basket_num = int(choose_match.group(1))
         return ('choose', basket_num)
-
+    
     if re.search(r'\breveal\b', command_text, flags=re.IGNORECASE):
         reveal_content_match = re.search(r'reveal\s*\[([^\]]+)\]', command_text, flags=re.IGNORECASE)
         if reveal_content_match:
@@ -136,12 +133,12 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
             reveal_instructions = command_text.replace("reveal", "").strip()
         reveal_choices = [choice.strip() for choice in reveal_instructions.split(",") if choice.strip()]
         return ('reveal', reveal_choices)
-
+    
     return ('unknown', command_text)
 
-#############################
-# CSV Logging Functionality #
-#############################
+#####################################################
+# CSV Logging Functionality and Data Preparation    #
+#####################################################
 def log_game_data_to_csv(game_data: dict) -> None:
     """
     Writes the game_data dictionary as a row to the CSV file.
@@ -151,11 +148,11 @@ def log_game_data_to_csv(game_data: dict) -> None:
         'timestamp', 'round_type', 'num_baskets', 'num_prize_types',
         'prize_labels', 'prize_values', 'basket_counts', 'nudge_present',
         'default_basket', 'best_basket', 'action_log', 'revealed_cells', 'final_choice',
-        'total_reveal_cost', 'points_earned', 'wrong_moves', 'model_used'
+        'total_reveal_cost', 'points_earned', 'wrong_moves', 'model_used', 'error'
     ]
     file_exists = os.path.exists(GameConfig.CSV_FILENAME)
     
-    # Convert revealed_cells dictionary to use string keys instead of tuples.
+    # Convert revealed_cells keys to strings.
     if 'revealed_cells' in game_data:
         revealed_cells_converted = {
             f"{basket},{prize}": value 
@@ -175,35 +172,33 @@ def log_game_data_to_csv(game_data: dict) -> None:
             row[col] = value
         writer.writerow(row)
 
-#############################
-# Main Game Implementation  #
-#############################
+##############################################
+# Main Game Implementation with Nudging     #
+##############################################
 class BasketGame:
-    def __init__(self, practice: bool = False):
-        # Create an OpenAI client instance.
+    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None):
+        """
+        force_nudge: If set (True or False), the nudging status is fixed for this run.
+        """
         self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
-        # Visible table: unrevealed cells are displayed as "-".
         self.baskets: Dict[int, Dict[str, Optional[int]]] = {}
-        # Hidden counts for each basket and prize type.
         self.basket_counts: Dict[int, Dict[str, int]] = {}
-        # Fixed point values for each prize type.
         self.prize_values: Dict[str, int] = {}
         
-        self.default_option: Optional[int] = None
-        self.nudge_present: Optional[bool] = None
-
+        self.default_option: Optional[int] = None  # Recommended basket (by count heuristic)
+        self.nudge_present: Optional[bool] = None    # Indicates if nudging is active
+        
         self.game_data: Dict = {}
         self.practice = practice
-
-        # Dynamic game parameters.
+        self.force_nudge = force_nudge
+        
         self.num_baskets: int = 0
         self.num_prize_types: int = 0
         self.prize_labels: List[str] = []
-
-        # We use a summary context instead of the full conversation.
+        
+        # Use a summary context instead of the full conversation.
         self.dialog_history: List[Dict[str, str]] = []
-        # Counter for wrong moves.
         self.wrong_moves = 0
 
     def initialize_game(self) -> None:
@@ -225,20 +220,21 @@ class BasketGame:
             basket: {prize: '-' for prize in self.prize_labels}
             for basket in range(1, self.num_baskets + 1)
         }
-        # Determine the default (recommended) basket using a simple count heuristic
-        # (i.e., assuming every prize is equal). This is the basket with the most prizes.
+        # Determine the recommended basket using a simple count heuristic (assume all prizes equal).
         def count_sum(b):
             return sum(self.basket_counts[b][prize] for prize in self.prize_labels)
         self.default_option = max(range(1, self.num_baskets + 1), key=count_sum)
-        # The default nudge is available on certain problems.
-        self.nudge_present = random.choice([True, False]) if GameConfig.NUDGE_ENABLED else False
-
-        # Reset summary context and wrong moves.
+        # Use force_nudge if provided, otherwise choose randomly.
+        if self.force_nudge is not None:
+            self.nudge_present = self.force_nudge
+        else:
+            self.nudge_present = random.choice([True, False]) if GameConfig.NUDGE_ENABLED else False
+        
         self.dialog_history = [
             {"role": "system", "content": "You are an AI playing a sequential decision-making game."}
         ]
         self.wrong_moves = 0
-
+        
         self.game_data = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'round_type': 'practice' if self.practice else 'test',
@@ -256,12 +252,13 @@ class BasketGame:
             'points_earned': None,
             'model_used': GameConfig.MODEL_NAME,
             'wrong_moves': 0,
+            'error': None
         }
 
     def get_context_summary(self) -> str:
         """
-        Build a concise summary of the game context.
-        This includes a brief action log, the wrong-move count, and the recommended basket if available.
+        Build a concise summary of the game context,
+        including a brief action log, wrong move count, and recommended basket if available.
         """
         summary = ""
         if self.game_data.get('action_log'):
@@ -292,8 +289,8 @@ class BasketGame:
           - If revealing, list cells in the format "basket prize" (e.g., "1 a", "2 b").
           - If choosing a basket, supply the basket number.
           - Alternatively, you can 'accept' the recommended basket.
-          - Note: The recommended basket is computed by assuming all prizes are equal (i.e., by total count)
-                  and represents a good default. However, the actual best basket (which maximizes payout)
+          - Note: The recommended basket is computed by assuming all prizes are equal (by total count)
+                  and represents a good default option. However, the actual best basket (which maximizes payout)
                   may be different.
         
         Respond in JSON format with the following keys:
@@ -316,8 +313,8 @@ class BasketGame:
         if self.nudge_present:
             nudge_text = (
                 f"You have the option to choose the recommended basket (default nudge). "
-                f"The recommended basket is Basket {self.default_option}, which is computed by assuming all prizes are equal (i.e., by total count) and represents a good default option. "
-                f"However, note that the actual best basket (the one that would pay the highest based on prize values) might be different.\n"
+                f"The recommended basket is Basket {self.default_option}, which is computed by assuming all prizes are equal (by total count) and represents a good default option. "
+                f"Note that this heuristic may not always yield the highest payout once actual prize values are revealed.\n"
             )
         else:
             nudge_text = ""
@@ -356,7 +353,7 @@ class BasketGame:
     def reveal_values(self, choices: List[str]) -> None:
         """
         Reveals the specified cells.
-        If a cell is already revealed or the choice is invalid, that counts as a wrong move.
+        If a cell is already revealed or the choice is invalid, it counts as a wrong move.
         """
         for choice in choices:
             try:
@@ -389,18 +386,26 @@ class BasketGame:
                 self.wrong_moves += 1
 
     def play(self) -> None:
-        """Main game loop. The hybrid context summary is sent on every turn, and wrong moves are tracked."""
+        """
+        Main game loop.
+        If the AI produces an unclear action (unknown command), or if too many wrong moves or iterations occur,
+        the game is flagged as an error and is skipped (final_choice is not stored).
+        The error is logged in the stats.
+        """
         self.initialize_game()
         final_choice = None
+        error_occurred = False
+        error_message = ""
         max_iterations = 10
         iteration = 0
 
         while iteration < max_iterations:
             iteration += 1
             if self.wrong_moves >= GameConfig.MAX_WRONG_MOVES:
-                print("Too many wrong moves by the AI. Ending game with default basket.")
-                final_choice = self.default_option
+                error_message = "Exceeded wrong move threshold"
+                print("Too many wrong moves. Terminating game with error.")
                 self.game_data['action_log'].append("Exceeded wrong move threshold.")
+                error_occurred = True
                 break
 
             action_prompt = self.get_action_prompt()
@@ -408,13 +413,21 @@ class BasketGame:
             print(action_prompt)
             ai_decision = self.ask_gpt()
             if not ai_decision:
-                print("No decision received from AI. Ending game.")
+                error_message = "No decision received"
+                print("No decision received from AI. Terminating game with error.")
+                error_occurred = True
                 break
             print(f"AI raw response: {ai_decision}")
             self.game_data['action_log'].append(ai_decision)
 
             command_type, command_value = process_ai_response(ai_decision, self.nudge_present)
             print(f"Parsed command type: {command_type}, value: {command_value}")
+
+            if command_type == 'unknown':
+                error_message = "Unknown command"
+                print("Unclear action encountered. Terminating game with error.")
+                error_occurred = True
+                break
 
             if command_type == 'accept':
                 final_choice = self.default_option
@@ -433,16 +446,25 @@ class BasketGame:
 
             self.game_data['wrong_moves'] = self.wrong_moves
 
+        if error_occurred:
+            self.game_data['error'] = error_message
+            print(f"Game ended with error: {error_message}. Skipping game.")
+            log_game_data_to_csv(self.game_data)
+            return
+
         if final_choice is None:
-            print("No valid choice was made. Choosing default basket.")
-            final_choice = self.default_option
+            error_message = "No valid choice made - loop ended"
+            print("No valid choice was made. Terminating game with error.")
+            self.game_data['error'] = error_message
+            log_game_data_to_csv(self.game_data)
+            return
 
         total_reveal_cost = len(self.game_data['revealed_cells']) * GameConfig.COST_PER_REVEAL
         basket_total = sum(self.basket_counts[final_choice][prize] * self.prize_values[prize]
                            for prize in self.prize_labels)
         points_earned = basket_total - total_reveal_cost
 
-        # Compute the best basket (the one that would pay the highest using actual prize values).
+        # Compute the best basket (actual optimal based on prize values).
         best_basket = max(
             range(1, self.num_baskets + 1),
             key=lambda b: sum(self.basket_counts[b][prize] * self.prize_values[prize] for prize in self.prize_labels)
@@ -461,19 +483,26 @@ class BasketGame:
         print(f"Wrong moves: {self.wrong_moves}")
         print(f"Points earned: {points_earned}")
         print(f"Recommended basket (default nudge): Basket {self.default_option}")
-        print(f"Best basket (actual optimum): Basket {best_basket}")
-
-        # Log game data to CSV.
+        print(f"Best basket (optimal): Basket {best_basket}")
+        
         log_game_data_to_csv(self.game_data)
 
 ###########################
 # Experiment Entry Point  #
 ###########################
 def run_experiment():
-    print("=== Running Basket Game Experiment ===")
-    for i in range(GameConfig.NUM_TEST_ROUNDS):
-        print(f"\n--- Round {i+1} ---")
-        game = BasketGame(practice=False)
+    print("=== Running Game Simulation ===")
+    # Force a fixed number of nudged rounds for better comparison.
+    num_rounds = GameConfig.NUM_TEST_ROUNDS
+    rounds_with_nudge = num_rounds // 2
+    rounds_without_nudge = num_rounds - rounds_with_nudge
+    
+    total_rounds = [True] * rounds_with_nudge + [False] * rounds_without_nudge
+    random.shuffle(total_rounds)
+    
+    for i, force_nudge in enumerate(total_rounds, 1):
+        print(f"\n--- Round {i} ---")
+        game = BasketGame(practice=False, force_nudge=force_nudge)
         game.play()
 
 if __name__ == "__main__":

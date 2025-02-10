@@ -1,3 +1,4 @@
+# analysis.py
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -11,11 +12,17 @@ def load_and_prepare_data(filepath: str = "game_results.csv") -> pd.DataFrame:
     """Load and prepare the data for analysis."""
     df = pd.read_csv(filepath)
     
-    # Convert string representations of JSON objects to actual Python objects.
+    # Convert string representations of JSON objects to Python objects.
     for col in ['action_log', 'prize_values', 'basket_counts', 'revealed_cells']:
         df[col] = df[col].apply(json.loads)
     
-    # Extract decision patterns
+    # Ensure the 'error' column exists and is a string.
+    if 'error' in df.columns:
+        df['error'] = df['error'].fillna("").astype(str)
+    else:
+        df['error'] = ""
+    
+    # Extract additional columns.
     df['num_reveals'] = df['revealed_cells'].apply(len)
     df['accepted_default'] = df['action_log'].apply(
         lambda x: any('accepted default' in str(action).lower() for action in x)
@@ -120,10 +127,8 @@ def plot_nudge_optimality(df: pd.DataFrame) -> plt.Figure:
     """Plot analysis of nudge basket's value compared to other baskets."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
-    # Filter for cases where nudge was present
     nudge_df = df[df['nudge_present']]
     
-    # Calculate if the nudged basket was actually the best
     def is_nudge_optimal(row):
         basket_values = {}
         for basket, counts in row['basket_counts'].items():
@@ -142,16 +147,16 @@ def plot_nudge_optimality(df: pd.DataFrame) -> plt.Figure:
     nudge_analysis = nudge_df.apply(is_nudge_optimal, axis=1)
     optimal_stats = pd.DataFrame(nudge_analysis.tolist())
     
-    # Plot 1: Optimality Rate
+    # Plot optimality rate.
     optimal_rate = optimal_stats['is_optimal'].value_counts(normalize=True) * 100
     optimal_rate.plot(kind='bar', ax=ax1)
-    ax1.set_title('Was Nudge the Optimal Choice?')
+    ax1.set_title('Nudge Optimality Rate')
     ax1.set_xlabel('Nudge Was Optimal')
     ax1.set_ylabel('Percentage')
     for i, v in enumerate(optimal_rate):
         ax1.text(i, v, f'{v:.1f}%', ha='center', va='bottom')
     
-    # Plot 2: Value Difference Distribution
+    # Plot value difference distribution.
     sns.histplot(
         data=optimal_stats,
         x='value_difference',
@@ -162,7 +167,7 @@ def plot_nudge_optimality(df: pd.DataFrame) -> plt.Figure:
     ax2.set_xlabel('Points Difference')
     ax2.set_ylabel('Count')
     mean_diff = optimal_stats['value_difference'].mean()
-    ax2.text(0.95, 0.95, f'Mean Difference: {mean_diff:.1f} points',
+    ax2.text(0.95, 0.95, f'Mean Diff: {mean_diff:.1f} pts',
              transform=ax2.transAxes, ha='right', va='top',
              bbox=dict(facecolor='white', alpha=0.8))
     
@@ -222,7 +227,7 @@ def plot_basket_values_debug(df: pd.DataFrame) -> plt.Figure:
     for game in plot_df['Game'].unique():
         ax.axvline(x=game, color='gray', linestyle=':', alpha=0.3)
     
-    ax.set_title('Basket Values for Each Game\n(Default basket marked with *)')
+    ax.set_title('Basket Values for Each Game (Default marked with *)')
     ax.set_xlabel('Game Number')
     ax.set_ylabel('Basket Value')
     handles, labels = ax.get_legend_handles_labels()
@@ -232,8 +237,8 @@ def plot_basket_values_debug(df: pd.DataFrame) -> plt.Figure:
     return fig
 
 def generate_statistics(df: pd.DataFrame) -> None:
-    """Generate basic statistics about AI decisions."""
-    print("\n=== Decision Pattern Analysis ===")
+    """Generate basic statistics about AI decisions on valid games."""
+    print("\n=== Basic Decision Statistics (Valid Games) ===")
     
     print("\nOverall Decision Distribution:")
     print(df['final_decision'].value_counts(normalize=True).mul(100).round(1))
@@ -294,12 +299,10 @@ def generate_nudge_optimality_stats(df: pd.DataFrame) -> None:
 def generate_additional_statistics(df: pd.DataFrame) -> None:
     """Generate additional statistics such as cost efficiency and correlations."""
     print("\n=== Additional Statistics ===")
-    # Cost efficiency: reveal cost relative to (reveal cost + points earned)
     df['cost_efficiency'] = df['total_reveal_cost'] / (df['total_reveal_cost'] + df['points_earned'])
     print("Average cost efficiency ratio (reveal cost / (reveal cost + payout)) by final decision:")
     print(df.groupby('final_decision')['cost_efficiency'].mean().round(2))
     
-    # Correlation between wrong moves and points earned.
     corr = df['wrong_moves'].corr(df['points_earned'])
     print(f"\nCorrelation between wrong moves and points earned: {corr:.2f}")
 
@@ -316,9 +319,24 @@ def generate_model_comparison_stats(df: pd.DataFrame) -> None:
     else:
         print("No model comparison available, 'model_used' column missing.")
 
+def generate_error_statistics(df: pd.DataFrame) -> None:
+    """Generate statistics for games that ended with an error."""
+    error_df = df[df['error'] != ""]
+    print("\n=== Error Games Statistics ===")
+    print("Total games with errors:", len(error_df))
+    if len(error_df) > 0:
+        print("Error Distribution:")
+        print(error_df['error'].value_counts())
+    else:
+        print("No error games recorded.")
+
 def generate_analysis_report():
     """Generate complete analysis report with plots and statistics."""
     df = load_and_prepare_data()
+    
+    # Separate valid games from error games.
+    valid_df = df[df['error'] == ""]
+    error_df = df[df['error'] != ""]
     
     sns.set_theme(style="whitegrid", palette="deep")
     plt.rcParams['font.size'] = 10
@@ -336,22 +354,27 @@ def generate_analysis_report():
         'basket_values_debug': plot_basket_values_debug
     }
     
+    # Generate plots only for valid games.
     for name, plot_func in plots.items():
-        fig = plot_func(df)
+        fig = plot_func(valid_df)
         plt.savefig(f'plots/{name}.png', dpi=300, bbox_inches='tight')
         plt.close()
     
-    print("\n===== Basic Statistics =====")
-    generate_statistics(df)
+    print("\n===== Basic Statistics (Valid Games) =====")
+    generate_statistics(valid_df)
     
-    print("\n===== Nudge Optimality Statistics =====")
-    generate_nudge_optimality_stats(df)
+    print("\n===== Nudge Optimality Statistics (Valid Games) =====")
+    generate_nudge_optimality_stats(valid_df)
     
-    print("\n===== Additional Statistics =====")
-    generate_additional_statistics(df)
+    print("\n===== Additional Statistics (Valid Games) =====")
+    generate_additional_statistics(valid_df)
     
-    print("\n===== Model Comparison Statistics =====")
-    generate_model_comparison_stats(df)
+    print("\n===== Model Comparison Statistics (Valid Games) =====")
+    generate_model_comparison_stats(valid_df)
+    
+    # Report error statistics separately.
+    print("\n===== Error Games Statistics =====")
+    generate_error_statistics(error_df)
 
 if __name__ == "__main__":
     generate_analysis_report()

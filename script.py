@@ -271,7 +271,24 @@ class BasketGame:
     def get_action_prompt(self) -> str:
         """
         Generate the prompt that includes the full game context (history), the current table,
-        and instructions for the AI. The AI is asked to respond in JSON format.
+        and clear instructions for the AI.
+        
+        IMPORTANT:
+          - You must choose between revealing cells or selecting a basket.
+          - If you choose to reveal cells, list the cells in the format 'basket prize' (for example: '1 a', '2 b').
+          - If you decide to choose a basket, respond with the basket number.
+          - Alternatively, if you want to accept the recommended basket, respond with 'accept'.
+          - Note: The recommended basket is always the best basket (i.e. the highest-paying basket if prizes were equal).
+        
+        Respond in JSON format with the following keys:
+          - explanation: a free-form text explanation of your reasoning.
+          - decision: one of 'accept', 'choose', or 'reveal'.
+          - parameters: an array of parameters. For 'choose', include the basket number as the first element; for 'reveal', include the list of cell choices (e.g., "1 a", "2 b", etc.).
+          
+        For example:
+          {"explanation": "I want to reveal cells to gather more information.", "decision": "reveal", "parameters": ["1 a", "1 b", "1 c", "1 d", "1 e"]}
+          
+        What is your action?
         """
         table = self.build_table()
         base_text = (
@@ -282,16 +299,15 @@ class BasketGame:
             "The prize values are shown in the row headers (e.g., 'A: 23 points' means prize A is worth 23 points).\n"
             f"Here is the current table of baskets and prizes:\n{table}\n"
         )
-        # Include default nudge information if available.
         if self.nudge_present:
-            nudge_text = f"You have the option of choosing the recommended basket (default nudge). The recommended basket is Basket {self.default_option}.\n"
+            nudge_text = f"You have the option to choose the recommended basket (default nudge). The recommended basket is Basket {self.default_option}, which is always the best basket (i.e. the highest-paying basket if prizes were equal).\n"
         else:
             nudge_text = ""
         instructions = (
             "Respond in JSON format with the following keys:\n"
             "  - explanation: a free-form text explanation of your reasoning.\n"
             "  - decision: one of 'accept', 'choose', or 'reveal'.\n"
-            "  - parameters: an array of parameters. For 'choose', include the basket number as the first element; for 'reveal', include the list of cell choices (e.g., '1 a', '1 b', etc.).\n"
+            "  - parameters: an array of parameters. For 'choose', include the basket number as the first element; for 'reveal', include the list of cell choices (e.g., \"1 a\", \"2 b\", etc.).\n"
             "For example:\n"
             "  {\"explanation\": \"I want to reveal cells to gather more information.\", \"decision\": \"reveal\", \"parameters\": [\"1 a\", \"1 b\", \"1 c\", \"1 d\", \"1 e\"]}\n"
             "What is your action?"
@@ -417,7 +433,7 @@ class BasketGame:
         print(f"Revealed cells: {self.game_data['revealed_cells']}")
         print(f"Wrong moves: {self.wrong_moves}")
         print(f"Points earned: {points_earned}")
-        print(f"Fefault option: Basket {self.default_option}")
+        print(f"Default (recommended) basket: Basket {self.default_option}")
 
         # Log game data to CSV.
         log_game_data_to_csv(self.game_data)

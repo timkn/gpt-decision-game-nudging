@@ -170,6 +170,77 @@ def plot_nudge_optimality(df: pd.DataFrame) -> plt.Figure:
     plt.tight_layout()
     return fig
 
+def plot_basket_values_debug(df: pd.DataFrame) -> plt.Figure:
+    """Plot the values of all baskets for each game to debug nudge optimality."""
+    # Calculate values for each basket in each game
+    def get_basket_values(row):
+        values = {}
+        for basket, counts in row['basket_counts'].items():
+            value = sum(count * row['prize_values'][prize] 
+                       for prize, count in counts.items())
+            values[int(basket)] = value
+        return values
+    
+    df['basket_values'] = df.apply(get_basket_values, axis=1)
+    
+    # Prepare data for plotting
+    game_data = []
+    for idx, row in df.iterrows():
+        for basket, value in row['basket_values'].items():
+            game_data.append({
+                'Game': idx + 1,
+                'Basket': basket,
+                'Value': value,
+                'Is Default': basket == row.get('default_basket', None),
+                'Nudge Present': row['nudge_present']
+            })
+    
+    plot_df = pd.DataFrame(game_data)
+    
+    # Create plot
+    fig, ax = plt.subplots(figsize=(15, 8))
+    
+    # Plot all basket values
+    sns.scatterplot(
+        data=plot_df,
+        x='Game',
+        y='Value',
+        hue='Basket',
+        style='Is Default',
+        size='Is Default',
+        sizes={False: 50, True: 200},
+        alpha=0.6,
+        ax=ax
+    )
+    
+    # Highlight default baskets
+    default_baskets = plot_df[plot_df['Is Default']]
+    sns.scatterplot(
+        data=default_baskets,
+        x='Game',
+        y='Value',
+        color='red',
+        marker='*',
+        s=200,
+        label='Default Basket',
+        ax=ax
+    )
+    
+    # Add game divider lines
+    for game in plot_df['Game'].unique():
+        ax.axvline(x=game, color='gray', linestyle=':', alpha=0.3)
+    
+    ax.set_title('Basket Values for Each Game\n(Default basket marked with *)')
+    ax.set_xlabel('Game Number')
+    ax.set_ylabel('Basket Value')
+    
+    # Adjust legend
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(title='Baskets', bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    plt.tight_layout()
+    return fig
+
 def generate_statistics(df: pd.DataFrame) -> None:
     """Generate and print detailed statistics about AI decisions."""
     print("\n=== Decision Pattern Analysis ===")
@@ -262,7 +333,8 @@ def generate_analysis_report():
         'reveals_distribution': plot_reveals_distribution,
         'points_by_decision': plot_points_by_decision,
         'learning_curve': plot_learning_curve,
-        'nudge_optimality': plot_nudge_optimality
+        'nudge_optimality': plot_nudge_optimality,
+        'basket_values_debug': plot_basket_values_debug
     }
     
     for name, plot_func in plots.items():

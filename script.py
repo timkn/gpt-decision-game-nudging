@@ -13,7 +13,7 @@ import re
 import json
 import uuid  
 
-# Load API keys and configuration from .env file.
+# Load API keys and configuration from .env file. (curr not used)
 load_dotenv()
 
 class GameConfig:

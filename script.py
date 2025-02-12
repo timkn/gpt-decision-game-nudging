@@ -17,8 +17,8 @@ import uuid
 load_dotenv()
 
 class GameConfig:
-    MODEL_NAME = "gpt-4o-mini"  # default; will be overridden by experiment
-    EXPERIMENT_ID = "experiment_v1"  # update as needed
+    MODEL_NAME = "gpt-4o-mini"  
+    EXPERIMENT_ID = "experiment_v1"  
     MIN_BASKETS = 3
     MAX_BASKETS = 7
     MIN_PRIZE_ROWS = 3
@@ -32,7 +32,7 @@ class GameConfig:
     CSV_FILENAME = "game_results.csv"
     NUDGE_ENABLED = True
     NUM_PRACTICE_ROUNDS = 2
-    NUM_TEST_ROUNDS = 30  # default total rounds; not used in our new experiment loop
+    NUM_TEST_ROUNDS = 100 
     MAX_WRONG_MOVES = 3
 
 def generate_prize_values(n: int) -> Dict[str, int]:
@@ -47,9 +47,6 @@ def generate_prize_values(n: int) -> Dict[str, int]:
     labels = list(string.ascii_uppercase[:n])
     return dict(zip(labels, parts))
 
-#######################################################
-# Command Extraction and Processing (with JSON format) #
-#######################################################
 def extract_command(ai_response: str) -> str:
     backtick_matches = re.findall(r'`([^`]*)`', ai_response)
     if backtick_matches:

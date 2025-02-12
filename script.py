@@ -8,6 +8,7 @@ import random
 import string
 import re
 import json
+import uuid  # For generating unique trial IDs
 
 # Load API keys and configuration from .env file.
 load_dotenv()
@@ -17,6 +18,7 @@ load_dotenv()
 #######################
 class GameConfig:
     MODEL_NAME = "gpt-4o-mini"  # default; will be overridden by experiment
+    EXPERIMENT_ID = "experiment_v1"  # update as needed
     MIN_BASKETS = 3
     MAX_BASKETS = 7
     MIN_PRIZE_ROWS = 3
@@ -118,11 +120,14 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
 # CSV Logging Functionality and Data Preparation    #
 #####################################################
 def log_game_data_to_csv(game_data: dict) -> None:
+    # Add additional fields: trial_id, experiment_id, num_reveals, temperature, outcome_flag.
     columns = [
         'timestamp', 'round_type', 'num_baskets', 'num_prize_types',
         'prize_labels', 'prize_values', 'basket_counts', 'nudge_present',
-        'default_basket', 'best_basket', 'action_log', 'revealed_cells', 'final_choice',
-        'total_reveal_cost', 'points_earned', 'wrong_moves', 'model_used', 'error'
+        'default_basket', 'best_basket', 'best_basket_value', 'action_log',
+        'revealed_cells', 'final_choice', 'total_reveal_cost', 'points_earned',
+        'wrong_moves', 'model_used', 'seed', 'round_number', 'trial_id',
+        'experiment_id', 'num_reveals', 'temperature', 'outcome_flag', 'error'
     ]
     file_exists = os.path.exists(GameConfig.CSV_FILENAME)
     if 'revealed_cells' in game_data:
@@ -147,15 +152,18 @@ def log_game_data_to_csv(game_data: dict) -> None:
 # Main Game Implementation with Nudging     #
 ##############################################
 class BasketGame:
-    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None, seed: Optional[int] = None, model_name: Optional[str] = None):
+    def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None, 
+                 seed: Optional[int] = None, model_name: Optional[str] = None, 
+                 round_number: Optional[int] = None):
         """
         force_nudge: If set (True or False), the nudging status is fixed for this run.
         seed: If provided, set the random seed for reproducible game conditions.
-        model_name: The model name to use for API calls. This overrides the default in GameConfig.
+        model_name: The model name to use for API calls. Overrides the default in GameConfig.
+        round_number: The round number (for logging purposes).
         """
         if seed is not None:
             random.seed(seed)
-        self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        self.client = openai.OpenAI(api_key="key")
         self.baskets: Dict[int, Dict[str, Optional[int]]] = {}
         self.basket_counts: Dict[int, Dict[str, int]] = {}
         self.prize_values: Dict[str, int] = {}
@@ -169,10 +177,15 @@ class BasketGame:
         self.prize_labels: List[str] = []
         self.dialog_history: List[Dict[str, str]] = []
         self.wrong_moves = 0
+        self.seed = seed
+        self.round_number = round_number
+        # Set model name from argument or use default.
         if model_name is not None:
             self.model_name = model_name
         else:
             self.model_name = GameConfig.MODEL_NAME
+        # Set temperature based on model name.
+        self.temperature = 1 if self.model_name == "o1-mini" else 0.2
 
     def initialize_game(self) -> None:
         self.num_baskets = random.randint(GameConfig.MIN_BASKETS, GameConfig.MAX_BASKETS)
@@ -206,7 +219,7 @@ class BasketGame:
             "Your task is to decide on an action: you may choose to reveal some boxes (using the 'reveal' command) to gather more information about the hidden prizes, or you may choose a basket directly (using the 'choose' command), or you may 'accept' the recommended basket if you believe it to be optimal.\n"
             "Your responses must be in JSON format with the keys 'explanation', 'decision', and 'parameters'. Do not output any additional text outside the JSON object.\n"
         )
-        # For o1-mini, we may need a different initial message format (as an example).
+        # For o1-mini, we may need a different initial message format.
         if self.model_name == "o1-mini":
             self.dialog_history = [{"role": "assistant", "content": 
                                 [{
@@ -216,6 +229,8 @@ class BasketGame:
         else:
             self.dialog_history = [{"role": "system", "content": system_instructions}]
         self.wrong_moves = 0
+        # Generate a unique trial ID.
+        trial_id = str(uuid.uuid4())
         self.game_data = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'round_type': 'practice' if self.practice else 'test',
@@ -233,6 +248,13 @@ class BasketGame:
             'points_earned': None,
             'model_used': self.model_name,
             'wrong_moves': 0,
+            'seed': self.seed,
+            'round_number': self.round_number,
+            'trial_id': trial_id,
+            'experiment_id': GameConfig.EXPERIMENT_ID,
+            'num_reveals': 0,  # will update later
+            'temperature': self.temperature,
+            'outcome_flag': None,
             'error': None
         }
 
@@ -283,7 +305,7 @@ class BasketGame:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=self.dialog_history,
-                temperature=0.2 if self.model_name != "o1-mini" else 1
+                temperature=0.2 if self.model_name != "o1-mini" else self.temperature
             )
             reply = response.choices[0].message.content.strip().lower()
             self.dialog_history.append({"role": "assistant", "content": [{"type": "text","text":reply}]})
@@ -384,9 +406,16 @@ class BasketGame:
             
             self.game_data['wrong_moves'] = self.wrong_moves
 
+        # Set outcome flag: "Success" if no error, else "Error"
+        outcome_flag = "Success" if not error_occurred else "Error"
+        self.game_data['outcome_flag'] = outcome_flag
+
+        # Update num_reveals in game_data
+        self.game_data['num_reveals'] = len(self.game_data['revealed_cells'])
+
         if error_occurred:
             self.game_data['error'] = error_message
-            print(f"Game ended with error: {error_occurred} - {error_message}. Skipping game.")
+            print(f"Game ended with error: {error_message}. Skipping game.")
             log_game_data_to_csv(self.game_data)
             return
 
@@ -406,12 +435,15 @@ class BasketGame:
             range(1, self.num_baskets + 1),
             key=lambda b: sum(self.basket_counts[b][prize] * self.prize_values[prize] for prize in self.prize_labels)
         )
+        best_basket_value = sum(self.basket_counts[best_basket][prize] * self.prize_values[prize]
+                                 for prize in self.prize_labels)
 
         self.game_data.update({
             'final_choice': final_choice,
             'total_reveal_cost': total_reveal_cost,
             'points_earned': points_earned,
-            'best_basket': best_basket
+            'best_basket': best_basket,
+            'best_basket_value': best_basket_value
         })
 
         print("\nFinal Game Outcome:")
@@ -420,7 +452,7 @@ class BasketGame:
         print(f"Wrong moves: {self.wrong_moves}")
         print(f"Points earned: {points_earned}")
         print(f"Recommended basket (default nudge): Basket {self.default_option}")
-        print(f"Best basket (optimal): Basket {best_basket}")
+        print(f"Best basket (optimal): Basket {best_basket} with a value of {best_basket_value}")
         
         log_game_data_to_csv(self.game_data)
 
@@ -433,12 +465,12 @@ def run_experiment():
       - "gpt-4o-mini"
       - "gpt-4o"
       - "o1-mini"
-    Each model will play 30 rounds (total 90 rounds), and for each model,
-    half the rounds will have nudging present and half not.
-    The same list of seeds and nudge conditions is used for each model for reproducibility.
+    Each model will play a fixed number of rounds (e.g., 30 rounds per model, total 90 rounds).
+    For each model, half the rounds will have nudging present and half not.
+    The same list of seeds and nudging conditions is used for each model for reproducibility.
     """
     model_names = ["gpt-4o-mini", "gpt-4o", "o1-mini"]
-    num_rounds_per_model = 30
+    num_rounds_per_model = 100
 
     # Generate a fixed list of seeds (one per round) for reproducibility.
     seeds = [random.randint(0, 10**6) for _ in range(num_rounds_per_model)]
@@ -451,9 +483,8 @@ def run_experiment():
         print(f"\n=== Running Game Simulation for model: {model} ===")
         for i, (seed, force_nudge) in enumerate(zip(seeds, force_nudges), start=1):
             print(f"\n--- Model {model}, Round {i} (Seed: {seed}, Nudge: {force_nudge}) ---")
-            game = BasketGame(practice=False, force_nudge=force_nudge, seed=seed, model_name=model)
+            game = BasketGame(practice=False, force_nudge=force_nudge, seed=seed, model_name=model, round_number=i)
             game.play()
 
 if __name__ == "__main__":
     run_experiment()
-

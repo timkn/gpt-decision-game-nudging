@@ -1,3 +1,6 @@
+# Code improved by ChatGPT, source: https://openai.com/chatgpt/overview/ (2025)
+
+
 import openai
 import csv
 from datetime import datetime
@@ -8,14 +11,11 @@ import random
 import string
 import re
 import json
-import uuid  # For generating unique trial IDs
+import uuid  
 
 # Load API keys and configuration from .env file.
 load_dotenv()
 
-#######################
-# Configuration Class #
-#######################
 class GameConfig:
     MODEL_NAME = "gpt-4o-mini"  # default; will be overridden by experiment
     EXPERIMENT_ID = "experiment_v1"  # update as needed
@@ -35,9 +35,6 @@ class GameConfig:
     NUM_TEST_ROUNDS = 30  # default total rounds; not used in our new experiment loop
     MAX_WRONG_MOVES = 3
 
-#######################################################
-# Helper: Generate prize values that sum to 30
-#######################################################
 def generate_prize_values(n: int) -> Dict[str, int]:
     """
     Generate n random integer prize values that sum to 30.
@@ -116,9 +113,6 @@ def process_ai_response(ai_response: str, nudge_present: bool) -> Tuple[str, Any
         return ('reveal', reveal_choices)
     return ('unknown', command_text)
 
-#####################################################
-# CSV Logging Functionality and Data Preparation    #
-#####################################################
 def log_game_data_to_csv(game_data: dict) -> None:
     # Add additional fields: trial_id, experiment_id, num_reveals, temperature, outcome_flag.
     columns = [
@@ -148,9 +142,6 @@ def log_game_data_to_csv(game_data: dict) -> None:
             row[col] = value
         writer.writerow(row)
 
-##############################################
-# Main Game Implementation with Nudging     #
-##############################################
 class BasketGame:
     def __init__(self, practice: bool = False, force_nudge: Optional[bool] = None, 
                  seed: Optional[int] = None, model_name: Optional[str] = None, 
@@ -456,9 +447,6 @@ class BasketGame:
         
         log_game_data_to_csv(self.game_data)
 
-###########################
-# Experiment Entry Point  #
-###########################
 def run_experiment():
     """
     Run a set of rounds for three different models:

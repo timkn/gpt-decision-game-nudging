@@ -1,6 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-from analysis import load_and_prepare_data, plot_single_model_points
+from analysis_scripts.analysis import load_and_prepare_data, plot_single_model_points
 
 # Load data
 df = load_and_prepare_data()
